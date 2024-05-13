@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterable, List, Tuple
+import types
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, TypeVar
 
 from torch.utils._pytree import (
     _dict_flatten,
@@ -16,6 +17,10 @@ from ._compatibility import compatibility
 
 __all__ = ["immutable_list", "immutable_dict"]
 
+
+_T = TypeVar("_T")
+
+
 _help_mutation = """\
 If you are attempting to modify the kwargs or args of a torch.fx.Node object,
 instead create a new copy of it and assign the copy to the node:
@@ -30,14 +35,18 @@ def _no_mutation(self, *args, **kwargs):
     )
 
 
-def _create_immutable_container(base, mutable_functions):
-    container = type("immutable_" + base.__name__, (base,), {})
-    for attr in mutable_functions:
-        setattr(container, attr, _no_mutation)
-    return container
+def _create_immutable_container_class(
+    base: Type[_T],
+    mutable_methods: Iterable[str],
+    namespace: Optional[Dict[str, Any]] = None
+) -> Type[_T]:
+    kwds = dict.fromkeys(mutable_methods, _no_mutation)
+    if namespace is not None:
+        kwds.update(namespace)
+    return types.new_class("immutable_" + base.__name__, (base,), kwds)
 
 
-immutable_list = _create_immutable_container(
+immutable_list = _create_immutable_container_class(
     list,
     (
         "__delitem__",
@@ -53,13 +62,15 @@ immutable_list = _create_immutable_container(
         "reverse",
         "sort",
     ),
+    namespace={
+        "__hash__": lambda self: hash(tuple(self)),
+        "__reduce__": lambda self: (type(self), (tuple(self),)),
+    },
 )
-immutable_list.__reduce__ = lambda self: (immutable_list, (tuple(iter(self)),))
-immutable_list.__hash__ = lambda self: hash(tuple(self))
+immutable_list = compatibility(is_backward_compatible=True)(immutable_list)
 
-compatibility(is_backward_compatible=True)(immutable_list)
 
-immutable_dict = _create_immutable_container(
+immutable_dict = _create_immutable_container_class(
     dict,
     (
         "__delitem__",
@@ -71,10 +82,12 @@ immutable_dict = _create_immutable_container(
         "setdefault",
         "update",
     ),
+    namespace={
+        "__hash__": lambda self: hash(tuple(self.items())),
+        "__reduce__": lambda self: (type(self), (tuple(self.items()),)),
+    },
 )
-immutable_dict.__reduce__ = lambda self: (immutable_dict, (iter(self.items()),))
-immutable_dict.__hash__ = lambda self: hash(tuple(self.items()))
-compatibility(is_backward_compatible=True)(immutable_dict)
+immutable_dict = compatibility(is_backward_compatible=True)(immutable_dict)
 
 
 # Register immutable collections for PyTree operations
